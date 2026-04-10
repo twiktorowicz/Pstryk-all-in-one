@@ -134,6 +134,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         return True
                 return False
 
+            def _has_complete_price_data(response_data: Optional[dict], expected_hours: int = 24) -> bool:
+                """Sprawdza czy dane cenowe są kompletne (wszystkie godziny mają cenę).
+
+                Ramki z price_gross=None oznaczają godziny jeszcze nieopublikowane.
+                Ramki z price_gross=0.0 to legitymalnie zerowe ceny (np. nadwyżka solarna).
+                """
+                if not response_data or not isinstance(response_data.get("frames"), list):
+                    return False
+                frames = response_data["frames"]
+                if len(frames) < expected_hours:
+                    return False
+                with_price = sum(1 for f in frames if f.get("price_gross") is not None)
+                return with_price >= expected_hours
+
             def _are_frames_for_expected_date(response_data: Optional[dict], expected_date: datetime.date) -> bool:
                 """Sprawdza, czy daty w ramkach odpowiedzi API odpowiadają oczekiwanej dacie."""
                 if not response_data or not isinstance(response_data.get("frames"), list) or not response_data["frames"]:
@@ -164,14 +178,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
             pricing_purchase_tomorrow_response: Optional[dict] = None
             # Po potencjalnym resecie powyżej, _date_prices_tomorrow_valid_for jest już ustawione na tomorrow_local_date
+            # Używaj cache TYLKO jeśli dane są kompletne (24h z cenami > 0)
             if (coordinator._cached_purchase_prices_tomorrow and
-                    coordinator._cached_purchase_prices_tomorrow.get("frames")):
-                _LOGGER.debug(f"Używanie zbuforowanych cen ZAKUPU na jutro ({tomorrow_local_date}).")
+                    coordinator._cached_purchase_prices_tomorrow.get("frames") and
+                    _has_complete_price_data(coordinator._cached_purchase_prices_tomorrow)):
+                _LOGGER.debug(f"Używanie zbuforowanych KOMPLETNYCH cen ZAKUPU na jutro ({tomorrow_local_date}).")
                 pricing_purchase_tomorrow_response = coordinator._cached_purchase_prices_tomorrow
             else:
                 _LOGGER.info(
                     f"Próba pobrania nowych cen ZAKUPU na jutro ({tomorrow_local_date}). "
-                    "Cache był pusty lub nie zawierał ramek (mógł zostać zresetowany lub poprzednia próba nie powiodła się)."
+                    "Cache był pusty, niekompletny lub nie zawierał ramek."
                 )
                 api_response = await api_client.get_integrations_pricing_data(
                     resolution="hour", window_start=tomorrow_start_utc, window_end=tomorrow_end_utc
@@ -179,8 +195,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 if _has_meaningful_price_data(api_response) and \
                    _are_frames_for_expected_date(api_response, tomorrow_local_date):
                     pricing_purchase_tomorrow_response = api_response
-                    coordinator._cached_purchase_prices_tomorrow = api_response
-                    _LOGGER.info(f"Pomyślnie pobrano i zbuforowano ceny ZAKUPU na jutro ({tomorrow_local_date}) z rzeczywistymi danymi.")
+                    if _has_complete_price_data(api_response):
+                        coordinator._cached_purchase_prices_tomorrow = api_response
+                        _LOGGER.info(f"Pomyślnie pobrano i zbuforowano KOMPLETNE ceny ZAKUPU na jutro ({tomorrow_local_date}).")
+                    else:
+                        # Dane częściowe — użyj ale NIE cache'uj, spróbuj ponownie przy kolejnym cyklu
+                        coordinator._cached_purchase_prices_tomorrow = {}
+                        _LOGGER.info(f"Pobrano CZĘŚCIOWE ceny ZAKUPU na jutro ({tomorrow_local_date}), nie cache'uje — retry przy następnym cyklu.")
                 else:
                     reason = "brak znaczących danych"
                     if not _are_frames_for_expected_date(api_response, tomorrow_local_date) and _has_meaningful_price_data(api_response):
@@ -224,14 +245,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # --- Logika pobierania lub używania zbuforowanych cen SPRZEDAŻY (prosument) na jutro ---
             pricing_prosumer_tomorrow_response: Optional[dict] = None
             # Po potencjalnym resecie powyżej, _date_prices_tomorrow_valid_for jest już ustawione na tomorrow_local_date
+            # Używaj cache TYLKO jeśli dane są kompletne (24h z cenami > 0)
             if (coordinator._cached_prosumer_prices_tomorrow and
-                    coordinator._cached_prosumer_prices_tomorrow.get("frames")):
-                _LOGGER.debug(f"Używanie zbuforowanych cen SPRZEDAŻY na jutro ({tomorrow_local_date}).")
+                    coordinator._cached_prosumer_prices_tomorrow.get("frames") and
+                    _has_complete_price_data(coordinator._cached_prosumer_prices_tomorrow)):
+                _LOGGER.debug(f"Używanie zbuforowanych KOMPLETNYCH cen SPRZEDAŻY na jutro ({tomorrow_local_date}).")
                 pricing_prosumer_tomorrow_response = coordinator._cached_prosumer_prices_tomorrow
             else:
                 _LOGGER.info(
                     f"Próba pobrania nowych cen SPRZEDAŻY na jutro ({tomorrow_local_date}). "
-                    "Cache był pusty lub nie zawierał ramek (mógł zostać zresetowany lub poprzednia próba nie powiodła się)."
+                    "Cache był pusty, niekompletny lub nie zawierał ramek."
                 )
                 api_response_prosumer = await api_client.get_integrations_prosumer_pricing_data(
                     resolution="hour", window_start=tomorrow_start_utc, window_end=tomorrow_end_utc
@@ -239,8 +262,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 if _has_meaningful_price_data(api_response_prosumer) and \
                    _are_frames_for_expected_date(api_response_prosumer, tomorrow_local_date):
                     pricing_prosumer_tomorrow_response = api_response_prosumer
-                    coordinator._cached_prosumer_prices_tomorrow = api_response_prosumer
-                    _LOGGER.info(f"Pomyślnie pobrano i zbuforowano ceny SPRZEDAŻY na jutro ({tomorrow_local_date}) z rzeczywistymi danymi.")
+                    if _has_complete_price_data(api_response_prosumer):
+                        coordinator._cached_prosumer_prices_tomorrow = api_response_prosumer
+                        _LOGGER.info(f"Pomyślnie pobrano i zbuforowano KOMPLETNE ceny SPRZEDAŻY na jutro ({tomorrow_local_date}).")
+                    else:
+                        coordinator._cached_prosumer_prices_tomorrow = {}
+                        _LOGGER.info(f"Pobrano CZĘŚCIOWE ceny SPRZEDAŻY na jutro ({tomorrow_local_date}), nie cache'uje — retry przy następnym cyklu.")
                 else:
                     reason_prosumer = "brak znaczących danych"
                     if not _are_frames_for_expected_date(api_response_prosumer, tomorrow_local_date) and _has_meaningful_price_data(api_response_prosumer):

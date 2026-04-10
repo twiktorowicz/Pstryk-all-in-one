@@ -11,7 +11,6 @@ from homeassistant.util import dt as dt_util
 from .const import (
     API_BASE_URL,
     API_UNIFIED_METRICS_PATH,
-    API_PROSUMER_PRICING_PATH,
     API_REQUEST_HEADERS,
     API_TIMEOUT,
 )
@@ -119,11 +118,11 @@ class PstrykApiClientApiKey:
                     raise PstrykAuthError(f"Błąd autoryzacji ({response.status}). Sprawdź Klucz API. Treść błędu API: {response_text_for_error_log[:100]}")
 
                 if response.status == 429:
-                    cooldown_seconds = 3600
+                    cooldown_seconds = 120
                     match = re.search(r"Expected available in (\d+) seconds", response_text_for_error_log)
                     if match:
                         try:
-                            cooldown_seconds = int(match.group(1))
+                            cooldown_seconds = min(int(match.group(1)), 300)
                         except ValueError:
                             pass
                     self._throttle_until[path] = dt_util.utcnow() + timedelta(seconds=cooldown_seconds)
@@ -382,6 +381,66 @@ class PstrykApiClientApiKey:
 
         return normalized_response
 
+    def _normalize_unified_prosumer_pricing_response(self, response_data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Mapuje unified-metrics pricing na płaski format cenowy prosumencki (sprzedaż).
+
+        Wyciąga price_prosumer_net/gross z unified-metrics i mapuje je
+        na price_net/price_gross oczekiwane przez sensor.py.
+        """
+        if not isinstance(response_data, dict):
+            return response_data
+
+        normalized_frames: list[Dict[str, Any]] = []
+        for frame in response_data.get("frames", []):
+            if not isinstance(frame, dict):
+                continue
+
+            pricing_values = _pick_metric_container(frame, UNIFIED_PRICING_RESPONSE_KEYS)
+            prosumer_net = _pick_value(pricing_values, "price_prosumer_net")
+            prosumer_gross = _pick_value(pricing_values, "price_prosumer_gross")
+
+            # API returns price_prosumer_gross=0.0 (not null) when data
+            # hasn't been published yet.  Detect this by checking tge_price
+            # – if the TGE spot price is null, the hour is unpublished.
+            tge_price = _pick_value(pricing_values, "tge_price")
+            if tge_price is None:
+                prosumer_net = None
+                prosumer_gross = None
+
+            normalized_frame: Dict[str, Any] = {
+                "start": frame.get("start"),
+                "end": frame.get("end"),
+                "price_net": prosumer_net,
+                "price_gross": prosumer_gross,
+                "is_cheap": _pick_value(pricing_values, "is_cheap"),
+                "is_expensive": _pick_value(pricing_values, "is_expensive"),
+            }
+            is_live = frame.get("is_live")
+            if is_live is None:
+                is_live = _pick_value(pricing_values, "is_live")
+            if is_live is not None:
+                normalized_frame["is_live"] = is_live
+            normalized_frames.append(normalized_frame)
+
+        normalized_response: Dict[str, Any] = {
+            "frames": normalized_frames,
+            "price_net_avg": None,
+            "price_gross_avg": None,
+        }
+
+        if normalized_frames:
+            # Count only frames with actual data (not None) for averaging
+            frames_with_net = sum(1 for f in normalized_frames if f.get("price_net") is not None)
+            frames_with_gross = sum(1 for f in normalized_frames if f.get("price_gross") is not None)
+            total_net = _sum_numeric_frames(normalized_frames, "price_net")
+            if total_net is not None and frames_with_net > 0:
+                normalized_response["price_net_avg"] = round(total_net / frames_with_net, 6)
+            total_gross = _sum_numeric_frames(normalized_frames, "price_gross")
+            if total_gross is not None and frames_with_gross > 0:
+                normalized_response["price_gross_avg"] = round(total_gross / frames_with_gross, 6)
+
+        return normalized_response
+
     async def test_authentication(self) -> bool:
         """Testuje autentykację Kluczem API poprzez próbę pobrania danych unified-metrics."""
         try:
@@ -442,12 +501,16 @@ class PstrykApiClientApiKey:
         return self._normalize_unified_pricing_response(response_data)
 
     async def get_integrations_prosumer_pricing_data(self, resolution: str, window_start: datetime, window_end: datetime) -> Optional[Dict[str, Any]]:
-        """Pobiera dane cenowe sprzedaży (prosument) z /integrations/prosumer-pricing/."""
-        start_str = window_start.strftime('%Y-%m-%dT%H:%M:%SZ')
-        end_str = window_end.strftime('%Y-%m-%dT%H:%M:%SZ')   
-        params = {"resolution": resolution, "window_start": start_str, "window_end": end_str}
-        try:
-            return await self._request("GET", API_PROSUMER_PRICING_PATH, params=params) 
-        except PstrykApiError as e:
-            _LOGGER.warning(f"Nie udało się pobrać danych z {API_PROSUMER_PRICING_PATH} (ceny sprzedaży): {e}")
-            return None
+        """Pobiera dane cenowe sprzedaży (prosument) z unified-metrics (pricing).
+
+        Wcześniej używano /integrations/prosumer-pricing/, ale endpoint wymaga
+        partner API key. Zamiast tego wyciągamy price_prosumer_net/gross
+        z unified-metrics?metrics=pricing.
+        """
+        response_data = await self._request_unified_metrics(
+            metrics=UNIFIED_METRIC_PRICING,
+            resolution=resolution,
+            window_start=window_start,
+            window_end=window_end,
+        )
+        return self._normalize_unified_prosumer_pricing_response(response_data)

@@ -304,12 +304,11 @@ class PstrykUniversalSensor(CoordinatorEntity, SensorEntity):
                 frame_info = {
                     "start": start_local_str, 
                     "end": end_local_str,     
-                    "price": price_value,
+                    "price": price_value if price_value is not None else 0.0,
                     ATTR_PRICE_IS_CHEAP: is_cheap_flag,
                     ATTR_PRICE_IS_EXPENSIVE: is_expensive_flag,
                 }
-                frame_info_cleaned = {k: v for k, v in frame_info.items() if v is not None}
-                formatted_frames.append(frame_info_cleaned)
+                formatted_frames.append(frame_info)
             except Exception as e:
                 _LOGGER.warning(f"({self.name}) Błąd podczas formatowania ramki cenowej dla atrybutów: {frame}, błąd: {e}")
         return formatted_frames

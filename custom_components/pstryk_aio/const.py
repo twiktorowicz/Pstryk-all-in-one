@@ -37,7 +37,9 @@ API_UNIFIED_METRICS_PATH = "/integrations/meter-data/unified-metrics/"
 API_METER_DATA_USAGE_PATH = "/integrations/meter-data/energy-usage/"
 API_METER_DATA_COST_PATH = "/integrations/meter-data/energy-cost/"
 API_PRICING_PATH = "/integrations/pricing/" 
-API_PROSUMER_PRICING_PATH = "/integrations/prosumer-pricing/" 
+# API_PROSUMER_PRICING_PATH usunięty — endpoint wymaga partner key.
+# Ceny sprzedaży pobierane są teraz przez unified-metrics?metrics=pricing
+# (pola price_prosumer_net / price_prosumer_gross).
 # Nagłówki
 DEFAULT_USER_AGENT = "Mozilla/5.0 (Home Assistant Pstryk AIO Integration v4 APIKeyBearer)"
 API_REQUEST_HEADERS = {"User-Agent": DEFAULT_USER_AGENT, "Accept": "application/json"}
