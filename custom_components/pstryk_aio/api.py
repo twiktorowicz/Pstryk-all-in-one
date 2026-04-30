@@ -21,6 +21,9 @@ _LOGGER = logging.getLogger(__name__)
 UNIFIED_METRIC_METER_VALUES = "meter_values"
 UNIFIED_METRIC_COST = "cost"
 UNIFIED_METRIC_PRICING = "pricing"
+UNIFIED_METRIC_BUNDLE = ",".join(
+    (UNIFIED_METRIC_METER_VALUES, UNIFIED_METRIC_COST, UNIFIED_METRIC_PRICING)
+)
 
 UNIFIED_METER_VALUES_RESPONSE_KEYS = ("meterValues", "meter_values")
 UNIFIED_COST_RESPONSE_KEYS = ("cost",)
@@ -440,6 +443,26 @@ class PstrykApiClientApiKey:
                 normalized_response["price_gross_avg"] = round(total_gross / frames_with_gross, 6)
 
         return normalized_response
+
+    async def get_unified_metrics_bundle(
+        self, resolution: str, window_start: datetime, window_end: datetime
+    ) -> Dict[str, Optional[Dict[str, Any]]]:
+        """Pobiera komplet metryk z unified-metrics jednym requestem API.
+
+        Zwraca dict z kluczami: usage, cost, purchase_pricing, prosumer_pricing.
+        """
+        response_data = await self._request_unified_metrics(
+            metrics=UNIFIED_METRIC_BUNDLE,
+            resolution=resolution,
+            window_start=window_start,
+            window_end=window_end,
+        )
+        return {
+            "usage": self._normalize_unified_usage_response(response_data),
+            "cost": self._normalize_unified_cost_response(response_data),
+            "purchase_pricing": self._normalize_unified_pricing_response(response_data),
+            "prosumer_pricing": self._normalize_unified_prosumer_pricing_response(response_data),
+        }
 
     async def test_authentication(self) -> bool:
         """Testuje autentykację Kluczem API poprzez próbę pobrania danych unified-metrics."""

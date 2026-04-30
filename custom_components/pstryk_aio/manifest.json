@@ -3,15 +3,15 @@
   "name": "Pstryk AiO",
   "after_dependencies": [],
   "codeowners": [
-    "@szkocot"
+    "@twiktorowicz"
   ],
   "config_flow": true,
   "dependencies": [],
-  "documentation": "https://github.com/szkocot/Pstryk-all-in-one",
+  "documentation": "https://github.com/twiktorowicz/Pstryk-all-in-one",
   "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/szkocot/Pstryk-all-in-one/issues",
+  "issue_tracker": "https://github.com/twiktorowicz/Pstryk-all-in-one/issues",
   "requirements": [
     "aiohttp>=3.9.0"
   ],
-  "version": "0.1.6"
+  "version": "0.2.1"
 }
